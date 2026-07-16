@@ -1,0 +1,6 @@
+{
+  "name": "Nano Editor",
+  "description": "A sleek monochrome terminal text editor that clones GNU nano, featuring syntax highlighting, Termux integration, undo/redo, and search & replace.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

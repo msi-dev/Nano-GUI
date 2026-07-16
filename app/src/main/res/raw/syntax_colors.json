@@ -1,0 +1,34 @@
+{
+  "extensions": {
+    "py": {
+      "keyword": "#FF9500",
+      "string": "#00DD00",
+      "comment": "#808080"
+    },
+    "java": {
+      "keyword": "#5555FF",
+      "string": "#00DD00",
+      "comment": "#808080"
+    },
+    "xml": {
+      "keyword": "#FF55FF",
+      "string": "#00DD00",
+      "comment": "#808080"
+    },
+    "json": {
+      "keyword": "#FFFF55",
+      "string": "#00DD00",
+      "comment": "#808080"
+    },
+    "sh": {
+      "keyword": "#55FFFF",
+      "string": "#00DD00",
+      "comment": "#808080"
+    }
+  },
+  "default": {
+    "keyword": "#FFFF55",
+    "string": "#00DD00",
+    "comment": "#808080"
+  }
+}
