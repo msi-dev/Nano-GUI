@@ -1,1 +1,2 @@
-/build
+# Push everything, ignore nothing inside app module
+
