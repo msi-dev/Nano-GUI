@@ -10,6 +10,31 @@
       "string": "#00DD00",
       "comment": "#808080"
     },
+    "kt": {
+      "keyword": "#FF55FF",
+      "string": "#00DD00",
+      "comment": "#808080"
+    },
+    "js": {
+      "keyword": "#FFFF55",
+      "string": "#00DD00",
+      "comment": "#808080"
+    },
+    "ts": {
+      "keyword": "#55FFFF",
+      "string": "#00DD00",
+      "comment": "#808080"
+    },
+    "cpp": {
+      "keyword": "#5555FF",
+      "string": "#00DD00",
+      "comment": "#808080"
+    },
+    "html": {
+      "keyword": "#FF55FF",
+      "string": "#00DD00",
+      "comment": "#808080"
+    },
     "xml": {
       "keyword": "#FF55FF",
       "string": "#00DD00",

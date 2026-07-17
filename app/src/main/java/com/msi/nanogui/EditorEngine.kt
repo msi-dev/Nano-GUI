@@ -1,4 +1,4 @@
-package com.example
+package com.msi.nanogui
 
 import android.content.Context
 import android.net.Uri

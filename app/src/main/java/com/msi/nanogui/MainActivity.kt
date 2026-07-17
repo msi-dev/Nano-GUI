@@ -1,4 +1,4 @@
-package com.example
+package com.msi.nanogui
 
 import android.app.Activity
 import android.content.Context
@@ -55,7 +55,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
-import com.example.ui.theme.MyApplicationTheme
+import com.msi.nanogui.ui.theme.MyApplicationTheme
 
 class MainActivity : ComponentActivity() {
 
@@ -66,6 +66,55 @@ class MainActivity : ComponentActivity() {
     private val fileExtensionState = mutableStateOf("")
     private val isModifiedState = mutableStateOf(false)
     private val textValueState = mutableStateOf(TextFieldValue(""))
+
+    private fun saveAutosaveDraft(text: String) {
+        try {
+            openFileOutput("autosave_draft.txt", Context.MODE_PRIVATE).use { output ->
+                output.write(text.toByteArray(Charsets.UTF_8))
+            }
+            val prefs = getSharedPreferences("nano_gui_prefs", Context.MODE_PRIVATE)
+            prefs.edit()
+                .putString("draft_uri", currentUriState.value?.toString())
+                .putString("draft_filename", currentFileNameState.value)
+                .putBoolean("draft_is_modified", isModifiedState.value)
+                .putBoolean("draft_exists", true)
+                .apply()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun loadAutosaveDraft(): String? {
+        return try {
+            openFileInput("autosave_draft.txt").use { input ->
+                input.readBytes().toString(Charsets.UTF_8)
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun clearAutosave() {
+        try {
+            deleteFile("autosave_draft.txt")
+            val prefs = getSharedPreferences("nano_gui_prefs", Context.MODE_PRIVATE)
+            prefs.edit()
+                .remove("draft_uri")
+                .remove("draft_filename")
+                .remove("draft_is_modified")
+                .putBoolean("draft_exists", false)
+                .apply()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        if (isModifiedState.value && textValueState.value.text.isNotEmpty()) {
+            saveAutosaveDraft(textValueState.value.text)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -163,6 +212,7 @@ class MainActivity : ComponentActivity() {
             textValueState.value = TextFieldValue(content)
             isModifiedState.value = false
             triggerBackgroundAnalysis(currentFileNameState.value ?: "", content)
+            clearAutosave()
         } else {
             Toast.makeText(this, "Failed to load incoming file", Toast.LENGTH_SHORT).show()
         }
@@ -281,6 +331,7 @@ class MainActivity : ComponentActivity() {
             if (engine.saveToUri(this, uri, textValueState.value.text)) {
                 isModifiedState.value = false
                 Toast.makeText(this, "Saved successfully", Toast.LENGTH_SHORT).show()
+                clearAutosave()
                 onSuccess?.invoke()
             } else {
                 Toast.makeText(this, "Failed to write, trying Save As...", Toast.LENGTH_SHORT).show()
@@ -302,6 +353,7 @@ class MainActivity : ComponentActivity() {
         var showHelpDialog by remember { mutableStateOf(false) }
         var showRenameDialog by remember { mutableStateOf(false) }
         var showKeyboardShortcutsDialog by remember { mutableStateOf(false) }
+        var showRestoreDraftDialog by remember { mutableStateOf(false) }
         var editorFontSize by remember { mutableStateOf(14f) }
         var baseFontSize by remember { mutableStateOf(14f) }
 
@@ -326,6 +378,7 @@ class MainActivity : ComponentActivity() {
                         textValue = TextFieldValue(content)
                         isModified = false
                         triggerBackgroundAnalysis(currentFileName ?: "", content)
+                        clearAutosave()
                     } else {
                         Toast.makeText(this@MainActivity, "Failed to load file", Toast.LENGTH_SHORT).show()
                     }
@@ -343,6 +396,7 @@ class MainActivity : ComponentActivity() {
                     if (engine.saveToUri(this@MainActivity, it, textValue.text)) {
                         isModified = false
                         Toast.makeText(this@MainActivity, "Saved successfully", Toast.LENGTH_SHORT).show()
+                        clearAutosave()
                     } else {
                         Toast.makeText(this@MainActivity, "Failed to save file", Toast.LENGTH_SHORT).show()
                     }
@@ -413,9 +467,22 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // Request keyboard focus
+        // Request keyboard focus and check for draft on startup
         LaunchedEffect(Unit) {
             focusRequester.requestFocus()
+            val prefs = getSharedPreferences("nano_gui_prefs", Context.MODE_PRIVATE)
+            val draftExists = prefs.getBoolean("draft_exists", false)
+            if (draftExists && intent?.data == null) {
+                showRestoreDraftDialog = true
+            }
+        }
+
+        // Auto-save LaunchedEffect
+        LaunchedEffect(textValue.text, isModified) {
+            if (isModified && textValue.text.isNotEmpty()) {
+                kotlinx.coroutines.delay(1500)
+                saveAutosaveDraft(textValue.text)
+            }
         }
 
         Column(
@@ -1186,6 +1253,72 @@ class MainActivity : ComponentActivity() {
                         colors = ButtonDefaults.textButtonColors(contentColor = textColor)
                     ) {
                         Text("Dismiss", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+                    }
+                }
+            )
+        }
+
+        // Restore Unsaved Session Dialog
+        if (showRestoreDraftDialog) {
+            val prefs = getSharedPreferences("nano_gui_prefs", Context.MODE_PRIVATE)
+            val draftFilename = prefs.getString("draft_filename", "Untitled") ?: "Untitled"
+            val draftUriStr = prefs.getString("draft_uri", null)
+            val draftIsModified = prefs.getBoolean("draft_is_modified", false)
+
+            AlertDialog(
+                onDismissRequest = { showRestoreDraftDialog = false },
+                title = {
+                    Text(
+                        text = "Restore Session",
+                        color = textColor,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp
+                    )
+                },
+                containerColor = surfaceColor,
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                modifier = Modifier.border(width = 1.dp, color = borderColor, shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)),
+                text = {
+                    Text(
+                        text = "An unsaved draft for '$draftFilename' was found from your last session. Would you like to restore it?",
+                        color = secondaryTextColor,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            val draftText = loadAutosaveDraft()
+                            if (draftText != null) {
+                                textValue = TextFieldValue(draftText)
+                                engine.textState.value = draftText
+                                currentFileName = draftFilename
+                                currentUri = draftUriStr?.let { Uri.parse(it) }
+                                isModified = draftIsModified
+                                fileExtension = getFileExtension(draftFilename)
+                                triggerBackgroundAnalysis(draftFilename, draftText)
+                                Toast.makeText(this@MainActivity, "Session restored", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(this@MainActivity, "Failed to restore session", Toast.LENGTH_SHORT).show()
+                            }
+                            showRestoreDraftDialog = false
+                        },
+                        colors = ButtonDefaults.textButtonColors(contentColor = textColor)
+                    ) {
+                        Text("Restore", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = {
+                            clearAutosave()
+                            showRestoreDraftDialog = false
+                        },
+                        colors = ButtonDefaults.textButtonColors(contentColor = secondaryTextColor)
+                    ) {
+                        Text("Discard", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
                     }
                 }
             )

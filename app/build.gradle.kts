@@ -10,11 +10,11 @@ plugins {
 }
 
 android {
-  namespace = "com.example"
+  namespace = "com.msi.nanogui"
   compileSdk = 36
 
   defaultConfig {
-    applicationId = "com.nanoeditor.app"
+    applicationId = "com.msi.nanogui"
     minSdk = 23
     targetSdk = 34
     versionCode = 1
