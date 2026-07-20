@@ -70,7 +70,7 @@ class EditorEngine {
             append(text)
 
             val commentPattern: Pattern?
-            val stringPattern = Pattern.compile("\"[^\"]*\"|'[^']*'")
+            var stringPattern: Pattern? = Pattern.compile("\"[^\"]*\"|'[^']*'")
             val keywordPattern: Pattern?
 
             when (extension.lowercase()) {
@@ -109,6 +109,36 @@ class EditorEngine {
                 "sh" -> {
                     commentPattern = Pattern.compile("#.*")
                     keywordPattern = Pattern.compile("\\b(if|then|else|elif|fi|case|esac|for|while|in|do|done|exit|return|echo|local|function)\\b")
+                }
+                "md" -> {
+                    commentPattern = Pattern.compile("<!--[\\s\\S]*?-->|`[^`]+`|```[\\s\\S]*?```")
+                    keywordPattern = Pattern.compile("(?m)(^#{1,6}\\s+.+|\\*\\*[^\\*]+\\*\\*|\\*[^\\*]+\\*)")
+                    stringPattern = Pattern.compile("\\[[^\\]]+\\]\\([^\\)]+\\)")
+                }
+                "yml", "yaml" -> {
+                    commentPattern = Pattern.compile("#.*")
+                    keywordPattern = Pattern.compile("\\b[a-zA-Z0-9_-]+\\b(?=\\s*:)")
+                    stringPattern = Pattern.compile("\"[^\"]*\"|'[^']*'")
+                }
+                "conf" -> {
+                    commentPattern = Pattern.compile(";.*|#.*")
+                    keywordPattern = Pattern.compile("\\[[^\\]]+\\]|\\b[a-zA-Z0-9_.-]+\\b(?=\\s*=)")
+                    stringPattern = Pattern.compile("\"[^\"]*\"|'[^']*'")
+                }
+                "css" -> {
+                    commentPattern = Pattern.compile("/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/")
+                    keywordPattern = Pattern.compile("(\\b[a-zA-Z0-9_-]+\\b(?=\\s*:)|^[ \\t]*[.#a-zA-Z0-9_-]+(?=\\s*\\{))")
+                    stringPattern = Pattern.compile("\"[^\"]*\"|'[^']*'")
+                }
+                "bat" -> {
+                    commentPattern = Pattern.compile("(?im)^[ \\t]*(?:rem|REM)\\b.*|::.*")
+                    keywordPattern = Pattern.compile("(?i)\\b(echo|set|if|else|for|in|do|goto|call|exit|pause|rem)\\b")
+                    stringPattern = Pattern.compile("\"[^\"]*\"|'[^']*'")
+                }
+                "csv" -> {
+                    commentPattern = null
+                    keywordPattern = null
+                    stringPattern = null
                 }
                 else -> {
                     commentPattern = Pattern.compile("#.*|//.*")

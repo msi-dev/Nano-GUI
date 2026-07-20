@@ -30,6 +30,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -45,6 +46,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -59,13 +62,107 @@ import com.msi.nanogui.ui.theme.MyApplicationTheme
 
 class MainActivity : ComponentActivity() {
 
-    private val engine = EditorEngine()
+    private var engine by mutableStateOf(EditorEngine())
 
     private val currentUriState = mutableStateOf<Uri?>(null)
     private val currentFileNameState = mutableStateOf<String?>("Untitled")
     private val fileExtensionState = mutableStateOf("")
     private val isModifiedState = mutableStateOf(false)
     private val textValueState = mutableStateOf(TextFieldValue(""))
+
+    val openedFiles = mutableStateListOf<OpenedFile>()
+    val activeFileIdState = mutableStateOf<String?>(null)
+
+    init {
+        val defaultEngine = EditorEngine()
+        val defaultFile = OpenedFile(
+            uri = null,
+            fileName = "Untitled",
+            fileExtension = "",
+            isModified = false,
+            textValue = TextFieldValue(""),
+            engine = defaultEngine
+        )
+        openedFiles.add(defaultFile)
+        activeFileIdState.value = defaultFile.id
+        engine = defaultEngine
+    }
+
+    private fun switchToTab(id: String) {
+        // 1. Save current active tab's values
+        val currentId = activeFileIdState.value
+        if (currentId != null) {
+            val currentFile = openedFiles.find { it.id == currentId }
+            if (currentFile != null) {
+                currentFile.uri = currentUriState.value
+                currentFile.fileName = currentFileNameState.value ?: "Untitled"
+                currentFile.fileExtension = fileExtensionState.value
+                currentFile.isModified = isModifiedState.value
+                currentFile.textValue = textValueState.value
+            }
+        }
+
+        // 2. Load newly selected tab's values
+        val nextFile = openedFiles.find { it.id == id }
+        if (nextFile != null) {
+            activeFileIdState.value = id
+            currentUriState.value = nextFile.uri
+            currentFileNameState.value = nextFile.fileName
+            fileExtensionState.value = nextFile.fileExtension
+            isModifiedState.value = nextFile.isModified
+            textValueState.value = nextFile.textValue
+            engine = nextFile.engine
+        }
+    }
+
+    private fun syncActiveTab() {
+        val currentId = activeFileIdState.value
+        if (currentId != null) {
+            val index = openedFiles.indexOfFirst { it.id == currentId }
+            if (index != -1) {
+                val currentFile = openedFiles[index]
+                val updatedFile = currentFile.copy(
+                    uri = currentUriState.value,
+                    fileName = currentFileNameState.value ?: "Untitled",
+                    fileExtension = fileExtensionState.value,
+                    isModified = isModifiedState.value,
+                    textValue = textValueState.value
+                )
+                if (currentFile != updatedFile) {
+                    openedFiles[index] = updatedFile
+                }
+            }
+        }
+    }
+
+    private fun closeTab(file: OpenedFile) {
+        val index = openedFiles.indexOfFirst { it.id == file.id }
+        if (index == -1) return
+
+        openedFiles.removeAt(index)
+        
+        // If the closed tab was the active one, switch to another tab
+        if (activeFileIdState.value == file.id) {
+            if (openedFiles.isNotEmpty()) {
+                val nextActiveIndex = index.coerceAtMost(openedFiles.size - 1)
+                switchToTab(openedFiles[nextActiveIndex].id)
+            } else {
+                // No tabs left! Create a new blank "Untitled" tab
+                val defaultEngine = EditorEngine()
+                defaultEngine.loadSyntaxColors(this)
+                val defaultFile = OpenedFile(
+                    uri = null,
+                    fileName = "Untitled",
+                    fileExtension = "",
+                    isModified = false,
+                    textValue = TextFieldValue(""),
+                    engine = defaultEngine
+                )
+                openedFiles.add(defaultFile)
+                switchToTab(defaultFile.id)
+            }
+        }
+    }
 
     private fun saveAutosaveDraft(text: String) {
         try {
@@ -182,13 +279,34 @@ class MainActivity : ComponentActivity() {
                 )
             }
 
+            var appVisible by remember { mutableStateOf(false) }
+            LaunchedEffect(Unit) {
+                appVisible = true
+            }
+            val coroutineScope = rememberCoroutineScope()
+
             MaterialTheme(colorScheme = customColorScheme) {
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),
                     contentWindowInsets = WindowInsets.safeDrawing,
                     containerColor = backgroundColor
                 ) { innerPadding ->
-                    EditorScreen(modifier = Modifier.padding(innerPadding))
+                    AnimatedVisibility(
+                        visible = appVisible,
+                        enter = fadeIn(animationSpec = tween(500)) + scaleIn(initialScale = 0.95f, animationSpec = tween(500)),
+                        exit = fadeOut(animationSpec = tween(400)) + scaleOut(targetScale = 0.95f, animationSpec = tween(400))
+                    ) {
+                        EditorScreen(
+                            modifier = Modifier.padding(innerPadding),
+                            onExit = {
+                                appVisible = false
+                                coroutineScope.launch {
+                                    kotlinx.coroutines.delay(450)
+                                    finish()
+                                }
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -203,18 +321,34 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIncomingUri(uri: Uri) {
-        currentUriState.value = uri
-        currentFileNameState.value = getFileName(this, uri)
-        val initialExt = getFileExtension(currentFileNameState.value ?: "")
-        fileExtensionState.value = initialExt
-        if (engine.loadFromUri(this, uri)) {
-            val content = engine.textState.value
-            textValueState.value = TextFieldValue(content)
-            isModifiedState.value = false
-            triggerBackgroundAnalysis(currentFileNameState.value ?: "", content)
-            clearAutosave()
+        val existingFile = openedFiles.find { it.uri == uri }
+        if (existingFile != null) {
+            switchToTab(existingFile.id)
         } else {
-            Toast.makeText(this, "Failed to load incoming file", Toast.LENGTH_SHORT).show()
+            val newEngine = EditorEngine()
+            newEngine.loadSyntaxColors(this)
+            if (newEngine.loadFromUri(this, uri)) {
+                val content = newEngine.textState.value
+                val name = getFileName(this, uri)
+                val ext = getFileExtension(name)
+                val newFile = OpenedFile(
+                    uri = uri,
+                    fileName = name,
+                    fileExtension = ext,
+                    isModified = false,
+                    textValue = TextFieldValue(content),
+                    engine = newEngine
+                )
+                if (openedFiles.size == 1 && openedFiles[0].uri == null && !openedFiles[0].isModified && openedFiles[0].textValue.text.isEmpty()) {
+                    openedFiles.clear()
+                }
+                openedFiles.add(newFile)
+                switchToTab(newFile.id)
+                triggerBackgroundAnalysis(name, content, newFile.id)
+                clearAutosave()
+            } else {
+                Toast.makeText(this, "Failed to load incoming file", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -245,15 +379,23 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun triggerBackgroundAnalysis(filename: String, content: String) {
+    private fun triggerBackgroundAnalysis(filename: String, content: String, targetTabId: String? = activeFileIdState.value) {
         lifecycleScope.launch {
             try {
                 val result = GeminiAnalyzer.analyzeFile(filename, content)
                 if (result != null) {
-                    if (result.is_code) {
-                        fileExtensionState.value = result.suggested_extension
-                    } else {
-                        fileExtensionState.value = "txt"
+                    val finalExt = if (result.is_code) result.suggested_extension else "txt"
+                    if (targetTabId != null) {
+                        val targetTab = openedFiles.find { it.id == targetTabId }
+                        if (targetTab != null) {
+                            val index = openedFiles.indexOf(targetTab)
+                            if (index != -1) {
+                                openedFiles[index] = targetTab.copy(fileExtension = finalExt)
+                            }
+                            if (activeFileIdState.value == targetTabId) {
+                                fileExtensionState.value = finalExt
+                            }
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -339,13 +481,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
     @Composable
-    fun EditorScreen(modifier: Modifier = Modifier) {
+    fun EditorScreen(
+        modifier: Modifier = Modifier,
+        onExit: () -> Unit
+    ) {
         var textValue by textValueState
         var currentUri by currentUriState
         var currentFileName by currentFileNameState
         var fileExtension by fileExtensionState
         var isModified by isModifiedState
+
+        var tabToClosePendingConfirm by remember { mutableStateOf<OpenedFile?>(null) }
+        var tabPendingSaveAndClose by remember { mutableStateOf<OpenedFile?>(null) }
 
         val scrollState = rememberScrollState()
         val focusRequester = remember { FocusRequester() }
@@ -364,23 +513,44 @@ class MainActivity : ComponentActivity() {
         val borderColor = if (isDark) Color(0xFF222222) else Color(0xFFDDDDDD)
         val surfaceColor = if (isDark) Color(0xFF0C0C0C) else Color(0xFFF9F9F9)
 
+        // Sync active tab with text edits
+        LaunchedEffect(textValue, isModified, currentUri, currentFileName, fileExtension) {
+            syncActiveTab()
+        }
+
         // SAF Launchers
         val openDocumentLauncher = rememberLauncherForActivityResult(
             contract = ActivityResultContracts.OpenDocument(),
             onResult = { uri ->
                 uri?.let {
-                    currentUri = it
-                    currentFileName = getFileName(this@MainActivity, it)
-                    val initialExt = getFileExtension(currentFileName ?: "")
-                    fileExtension = initialExt
-                    if (engine.loadFromUri(this@MainActivity, it)) {
-                        val content = engine.textState.value
-                        textValue = TextFieldValue(content)
-                        isModified = false
-                        triggerBackgroundAnalysis(currentFileName ?: "", content)
-                        clearAutosave()
+                    val existingFile = openedFiles.find { it.uri == uri }
+                    if (existingFile != null) {
+                        switchToTab(existingFile.id)
                     } else {
-                        Toast.makeText(this@MainActivity, "Failed to load file", Toast.LENGTH_SHORT).show()
+                        val newEngine = EditorEngine()
+                        newEngine.loadSyntaxColors(this@MainActivity)
+                        if (newEngine.loadFromUri(this@MainActivity, uri)) {
+                            val content = newEngine.textState.value
+                            val name = getFileName(this@MainActivity, uri)
+                            val ext = getFileExtension(name)
+                            val newFile = OpenedFile(
+                                uri = uri,
+                                fileName = name,
+                                fileExtension = ext,
+                                isModified = false,
+                                textValue = TextFieldValue(content),
+                                engine = newEngine
+                            )
+                            if (openedFiles.size == 1 && openedFiles[0].uri == null && !openedFiles[0].isModified && openedFiles[0].textValue.text.isEmpty()) {
+                                openedFiles.clear()
+                            }
+                            openedFiles.add(newFile)
+                            switchToTab(newFile.id)
+                            triggerBackgroundAnalysis(name, content, newFile.id)
+                            clearAutosave()
+                        } else {
+                            Toast.makeText(this@MainActivity, "Failed to load file", Toast.LENGTH_SHORT).show()
+                        }
                     }
                 }
             }
@@ -390,15 +560,42 @@ class MainActivity : ComponentActivity() {
             contract = ActivityResultContracts.CreateDocument("text/*"),
             onResult = { uri ->
                 uri?.let {
-                    currentUri = it
-                    currentFileName = getFileName(this@MainActivity, it)
-                    fileExtension = getFileExtension(currentFileName ?: "")
-                    if (engine.saveToUri(this@MainActivity, it, textValue.text)) {
-                        isModified = false
-                        Toast.makeText(this@MainActivity, "Saved successfully", Toast.LENGTH_SHORT).show()
-                        clearAutosave()
+                    val pendingTab = tabPendingSaveAndClose
+                    if (pendingTab != null) {
+                        val updatedTab = pendingTab.copy(
+                            uri = it,
+                            fileName = getFileName(this@MainActivity, it),
+                            fileExtension = getFileExtension(getFileName(this@MainActivity, it)),
+                            isModified = false
+                        )
+                        val index = openedFiles.indexOfFirst { file -> file.id == pendingTab.id }
+                        if (index != -1) {
+                            openedFiles[index] = updatedTab
+                        }
+                        if (activeFileIdState.value == pendingTab.id) {
+                            currentUri = updatedTab.uri
+                            currentFileName = updatedTab.fileName
+                            fileExtension = updatedTab.fileExtension
+                            isModified = updatedTab.isModified
+                        }
+                        if (updatedTab.engine.saveToUri(this@MainActivity, it, updatedTab.textValue.text)) {
+                            Toast.makeText(this@MainActivity, "Saved successfully", Toast.LENGTH_SHORT).show()
+                            closeTab(updatedTab)
+                        } else {
+                            Toast.makeText(this@MainActivity, "Failed to save file", Toast.LENGTH_SHORT).show()
+                        }
+                        tabPendingSaveAndClose = null
                     } else {
-                        Toast.makeText(this@MainActivity, "Failed to save file", Toast.LENGTH_SHORT).show()
+                        currentUri = it
+                        currentFileName = getFileName(this@MainActivity, it)
+                        fileExtension = getFileExtension(currentFileName ?: "")
+                        if (engine.saveToUri(this@MainActivity, it, textValue.text)) {
+                            isModified = false
+                            Toast.makeText(this@MainActivity, "Saved successfully", Toast.LENGTH_SHORT).show()
+                            clearAutosave()
+                        } else {
+                            Toast.makeText(this@MainActivity, "Failed to save file", Toast.LENGTH_SHORT).show()
+                        }
                     }
                 }
             }
@@ -418,7 +615,7 @@ class MainActivity : ComponentActivity() {
         }
 
         val onExitAction = {
-            finish()
+            onExit()
         }
 
         val onCutAction = {
@@ -505,11 +702,14 @@ class MainActivity : ComponentActivity() {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(
+                    modifier = Modifier.weight(1f),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Row(
                         modifier = Modifier
+                            .weight(1f, fill = false)
+                            .horizontalScroll(rememberScrollState())
                             .clip(androidx.compose.foundation.shape.RoundedCornerShape(4.dp))
                             .clickable { showRenameDialog = true }
                             .padding(horizontal = 6.dp, vertical = 2.dp),
@@ -521,7 +721,8 @@ class MainActivity : ComponentActivity() {
                             color = textColor,
                             fontFamily = FontFamily.Monospace,
                             fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1
                         )
                         Text(
                             text = "✎",
@@ -535,9 +736,12 @@ class MainActivity : ComponentActivity() {
                         color = secondaryTextColor,
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1
                     )
                 }
+
+                Spacer(modifier = Modifier.width(8.dp))
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -550,7 +754,8 @@ class MainActivity : ComponentActivity() {
                             fontFamily = FontFamily.Monospace,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(end = 4.dp)
+                            modifier = Modifier.padding(end = 4.dp),
+                            maxLines = 1
                         )
                     }
                     
@@ -579,7 +784,81 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-
+            // Multi-file Tab Bar (only shown if openedFiles.size >= 2)
+            if (openedFiles.size >= 2) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 8.dp, end = 8.dp, bottom = 6.dp)
+                        .clip(androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
+                        .background(surfaceColor)
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 6.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    openedFiles.forEach { file ->
+                        val isActive = file.id == activeFileIdState.value
+                        val tabBg = if (isActive) {
+                            if (isDark) Color(0xFF222222) else Color(0xFFEEEEEE)
+                        } else {
+                            Color.Transparent
+                        }
+                        
+                        Row(
+                            modifier = Modifier
+                                .widthIn(min = 60.dp, max = 150.dp)
+                                .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                                .background(tabBg)
+                                .clickable {
+                                    switchToTab(file.id)
+                                }
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            val dot = if (file.isModified) "* " else ""
+                            val labelText = "$dot${file.fileName}"
+                            Text(
+                                text = labelText,
+                                color = if (isActive) textColor else secondaryTextColor,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 12.sp,
+                                fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
+                                maxLines = 1,
+                                modifier = Modifier
+                                    .weight(1f, fill = false)
+                                    .basicMarquee(
+                                        iterations = Int.MAX_VALUE,
+                                        delayMillis = 1200
+                                    )
+                            )
+                            
+                            // Close icon 'x'
+                            Box(
+                                modifier = Modifier
+                                    .clip(androidx.compose.foundation.shape.CircleShape)
+                                    .clickable {
+                                        if (file.isModified) {
+                                            tabToClosePendingConfirm = file
+                                        } else {
+                                            closeTab(file)
+                                        }
+                                    }
+                                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    text = "×",
+                                    color = if (isActive) textColor else secondaryTextColor,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+                }
+            }
 
             // Gutter + Text Field
             val density = LocalDensity.current
@@ -1187,6 +1466,81 @@ class MainActivity : ComponentActivity() {
             )
         }
 
+        // Tab Close Unsaved Confirmation Dialog
+        if (tabToClosePendingConfirm != null) {
+            val fileToClose = tabToClosePendingConfirm!!
+            AlertDialog(
+                onDismissRequest = { tabToClosePendingConfirm = null },
+                title = {
+                    Text(
+                        text = "Unsaved Changes",
+                        color = textColor,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp
+                    )
+                },
+                containerColor = surfaceColor,
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                modifier = Modifier.border(width = 1.dp, color = borderColor, shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)),
+                text = {
+                    Text(
+                        text = "Do you want to save changes to '${fileToClose.fileName}' before closing?",
+                        color = secondaryTextColor,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 13.sp
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            val targetFile = fileToClose
+                            tabToClosePendingConfirm = null
+                            if (targetFile.uri != null) {
+                                // Save file immediately
+                                if (engine.saveToUri(this@MainActivity, targetFile.uri!!, targetFile.textValue.text)) {
+                                    Toast.makeText(this@MainActivity, "Saved successfully", Toast.LENGTH_SHORT).show()
+                                    closeTab(targetFile)
+                                } else {
+                                    Toast.makeText(this@MainActivity, "Failed to save, closing aborted", Toast.LENGTH_SHORT).show()
+                                }
+                            } else {
+                                // Need to Save As first
+                                tabPendingSaveAndClose = targetFile
+                                createDocumentLauncher.launch(targetFile.fileName)
+                            }
+                        },
+                        colors = ButtonDefaults.textButtonColors(contentColor = textColor)
+                    ) {
+                        Text("Save", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+                    }
+                },
+                dismissButton = {
+                    Row {
+                        TextButton(
+                            onClick = {
+                                val targetFile = fileToClose
+                                tabToClosePendingConfirm = null
+                                closeTab(targetFile)
+                            },
+                            colors = ButtonDefaults.textButtonColors(contentColor = secondaryTextColor)
+                        ) {
+                            Text("Don't Save", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        TextButton(
+                            onClick = {
+                                tabToClosePendingConfirm = null
+                            },
+                            colors = ButtonDefaults.textButtonColors(contentColor = secondaryTextColor)
+                        ) {
+                            Text("Cancel", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            )
+        }
+
         // Keyboard Shortcuts Dialog
         if (showKeyboardShortcutsDialog) {
             val configuration = androidx.compose.ui.platform.LocalConfiguration.current
@@ -1454,3 +1808,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
+
+data class OpenedFile(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    var uri: Uri?,
+    var fileName: String,
+    var fileExtension: String,
+    var isModified: Boolean,
+    var textValue: TextFieldValue,
+    val engine: EditorEngine
+)

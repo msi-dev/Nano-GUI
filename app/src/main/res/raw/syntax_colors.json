@@ -49,6 +49,36 @@
       "keyword": "#55FFFF",
       "string": "#00DD00",
       "comment": "#808080"
+    },
+    "md": {
+      "keyword": "#FF9500",
+      "string": "#00DD00",
+      "comment": "#808080"
+    },
+    "yml": {
+      "keyword": "#FF55FF",
+      "string": "#00DD00",
+      "comment": "#808080"
+    },
+    "yaml": {
+      "keyword": "#FF55FF",
+      "string": "#00DD00",
+      "comment": "#808080"
+    },
+    "conf": {
+      "keyword": "#FFFF55",
+      "string": "#00DD00",
+      "comment": "#808080"
+    },
+    "css": {
+      "keyword": "#FF55FF",
+      "string": "#00DD00",
+      "comment": "#808080"
+    },
+    "bat": {
+      "keyword": "#55FFFF",
+      "string": "#00DD00",
+      "comment": "#808080"
     }
   },
   "default": {

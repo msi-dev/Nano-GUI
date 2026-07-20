@@ -1,2 +1,18 @@
-# Push everything, ignore nothing
+# Android built/generated files
+build/
+app/build/
+.gradle/
+.kotlin/
+.build-outputs/
+local.properties
+*.apk
+*.ap_
+*.aab
 
+# IDE files
+.idea/
+*.iml
+.DS_Store
+
+# Output files
+captures/
