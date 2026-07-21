@@ -5,9 +5,6 @@ app/build/
 .kotlin/
 .build-outputs/
 local.properties
-*.apk
-*.ap_
-*.aab
 
 # IDE files
 .idea/
@@ -16,3 +13,9 @@ local.properties
 
 # Output files
 captures/
+
+# Allow output directory and output APKs to be tracked in Git
+!output/
+!output/*
+!app/output/
+!app/output/*

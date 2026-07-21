@@ -1,63 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    
-    <!-- Pencil Body (Solid Dark Silhouette) -->
-    <path
-        android:fillColor="#121212"
-        android:pathData="M 33,69 L 75,27"
-        android:strokeColor="#121212"
-        android:strokeWidth="16"
-        android:strokeLineCap="square" />
-        
-    <!-- Pencil Tip (Triangle Cone) -->
-    <path
-        android:fillColor="#121212"
-        android:pathData="M 27.4,63.4 L 38.6,74.6 L 15,87 Z" />
-        
-    <!-- Eraser Cap with gap -->
-    <path
-        android:fillColor="#121212"
-        android:pathData="M 81,21 L 87,15"
-        android:strokeColor="#121212"
-        android:strokeWidth="16"
-        android:strokeLineCap="round" />
-
-    <!-- White outer boundary cutout mask for the Badge -->
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M 72,72 m -28,0 a 28,28 0 1,1 56,0 a 28,28 0 1,1 -56,0" />
-
-    <!-- Black Badge Circle -->
-    <path
-        android:fillColor="#121212"
-        android:pathData="M 72,72 m -23,0 a 23,23 0 1,1 46,0 a 23,23 0 1,1 -46,0" />
-
-    <!-- Code brackets inside badge: < / > -->
-    <!-- Left Bracket < -->
-    <path
-        android:strokeColor="#FFFFFF"
-        android:strokeWidth="3.5"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round"
-        android:pathData="M 64,65 L 57,72 L 64,79" />
-
-    <!-- Slash / -->
-    <path
-        android:strokeColor="#FFFFFF"
-        android:strokeWidth="3.5"
-        android:strokeLineCap="round"
-        android:pathData="M 70,79 L 74,65" />
-
-    <!-- Right Bracket > -->
-    <path
-        android:strokeColor="#FFFFFF"
-        android:strokeWidth="3.5"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round"
-        android:pathData="M 80,65 L 87,72 L 80,79" />
-        
-</vector>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:width="66dp"
+        android:height="66dp"
+        android:drawable="@drawable/nano_app_icon_1784658125491"
+        android:gravity="center" />
+</layer-list>
