@@ -1,0 +1,11 @@
+{
+  "extension": "java",
+  "keyword_pattern": "\\b(public|private|protected|class|interface|enum|void|int|double|float|long|boolean|char|byte|short|if|else|for|while|do|switch|case|break|continue|return|try|catch|finally|throw|throws|import|package|new|this|super|static|final|abstract|synchronized|volatile|transient)\\b",
+  "comment_pattern": "//.*|/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/",
+  "string_pattern": "\"[^\"]*\"|'[^']*'",
+  "default_colors": {
+    "keyword": "#5555FF",
+    "string": "#00DD00",
+    "comment": "#808080"
+  }
+}

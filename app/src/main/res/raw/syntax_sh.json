@@ -1,0 +1,11 @@
+{
+  "extension": "sh",
+  "keyword_pattern": "\\b(if|then|else|elif|fi|case|esac|for|while|in|do|done|exit|return|echo|local|function)\\b",
+  "comment_pattern": "#.*",
+  "string_pattern": "\"[^\"]*\"|'[^']*'",
+  "default_colors": {
+    "keyword": "#55FFFF",
+    "string": "#00DD00",
+    "comment": "#808080"
+  }
+}

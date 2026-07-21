@@ -3,6 +3,9 @@ package com.msi.nanogui
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Visibility
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
@@ -27,6 +30,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.horizontalScroll
@@ -44,6 +48,8 @@ import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.animation.*
@@ -63,6 +69,7 @@ import com.msi.nanogui.ui.theme.MyApplicationTheme
 class MainActivity : ComponentActivity() {
 
     private var engine by mutableStateOf(EditorEngine())
+    private var codeEditorView: CodeEditorView? = null
 
     private val currentUriState = mutableStateOf<Uri?>(null)
     private val currentFileNameState = mutableStateOf<String?>("Untitled")
@@ -82,7 +89,9 @@ class MainActivity : ComponentActivity() {
             isModified = false,
             textValue = TextFieldValue(""),
             engine = defaultEngine
-        )
+        ).apply {
+            pieceTable.loadFromText("")
+        }
         openedFiles.add(defaultFile)
         activeFileIdState.value = defaultFile.id
         engine = defaultEngine
@@ -99,6 +108,10 @@ class MainActivity : ComponentActivity() {
                 currentFile.fileExtension = fileExtensionState.value
                 currentFile.isModified = isModifiedState.value
                 currentFile.textValue = textValueState.value
+                codeEditorView?.let { view ->
+                    currentFile.cursorLine = view.cursorLine
+                    currentFile.cursorCol = view.cursorCol
+                }
             }
         }
 
@@ -112,6 +125,13 @@ class MainActivity : ComponentActivity() {
             isModifiedState.value = nextFile.isModified
             textValueState.value = nextFile.textValue
             engine = nextFile.engine
+            codeEditorView?.let { view ->
+                view.setFileExtension(nextFile.fileExtension)
+                view.setPieceTable(nextFile.pieceTable)
+                view.cursorLine = nextFile.cursorLine
+                view.cursorCol = nextFile.cursorCol
+                view.invalidate()
+            }
         }
     }
 
@@ -149,7 +169,6 @@ class MainActivity : ComponentActivity() {
             } else {
                 // No tabs left! Create a new blank "Untitled" tab
                 val defaultEngine = EditorEngine()
-                defaultEngine.loadSyntaxColors(this)
                 val defaultFile = OpenedFile(
                     uri = null,
                     fileName = "Untitled",
@@ -157,7 +176,9 @@ class MainActivity : ComponentActivity() {
                     isModified = false,
                     textValue = TextFieldValue(""),
                     engine = defaultEngine
-                )
+                ).apply {
+                    pieceTable.loadFromText("")
+                }
                 openedFiles.add(defaultFile)
                 switchToTab(defaultFile.id)
             }
@@ -213,10 +234,25 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun requestStoragePermissions() {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M &&
+            android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.TIRAMISU) {
+            val permissions = arrayOf(
+                android.Manifest.permission.READ_EXTERNAL_STORAGE,
+                android.Manifest.permission.WRITE_EXTERNAL_STORAGE
+            )
+            val needed = permissions.filter { checkSelfPermission(it) != android.content.pm.PackageManager.PERMISSION_GRANTED }
+            if (needed.isNotEmpty()) {
+                requestPermissions(needed.toTypedArray(), 101)
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        engine.loadSyntaxColors(this)
+
+        requestStoragePermissions()
 
         val intentUri = intent?.data
         if (intentUri != null) {
@@ -230,10 +266,6 @@ class MainActivity : ComponentActivity() {
 
         if (firstRun) {
             prefs.edit().putBoolean("first_run", false).apply()
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M &&
-                android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.TIRAMISU) {
-                requestPermissions(arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE), 101)
-            }
         }
 
         if (!skipSetup && isTermuxInstalled()) {
@@ -321,12 +353,19 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIncomingUri(uri: Uri) {
+        if (uri.scheme == "content") {
+            try {
+                val takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                contentResolver.takePersistableUriPermission(uri, takeFlags)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
         val existingFile = openedFiles.find { it.uri == uri }
         if (existingFile != null) {
             switchToTab(existingFile.id)
         } else {
             val newEngine = EditorEngine()
-            newEngine.loadSyntaxColors(this)
             if (newEngine.loadFromUri(this, uri)) {
                 val content = newEngine.textState.value
                 val name = getFileName(this, uri)
@@ -338,7 +377,9 @@ class MainActivity : ComponentActivity() {
                     isModified = false,
                     textValue = TextFieldValue(content),
                     engine = newEngine
-                )
+                ).apply {
+                    pieceTable.loadFromUri(this@MainActivity, uri)
+                }
                 if (openedFiles.size == 1 && openedFiles[0].uri == null && !openedFiles[0].isModified && openedFiles[0].textValue.text.isEmpty()) {
                     openedFiles.clear()
                 }
@@ -379,12 +420,83 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun getRobustFileExtension(fileName: String, uri: Uri?, originalName: String? = null): String {
+        var ext = getFileExtension(fileName).lowercase()
+        if (ext.isNotEmpty()) return ext
+
+        if (originalName != null) {
+            val originalExt = getFileExtension(originalName).lowercase()
+            if (originalExt.isNotEmpty()) {
+                return originalExt
+            }
+        }
+
+        if (uri != null) {
+            val path = uri.path ?: ""
+            val lastDotInPath = path.lastIndexOf('.')
+            if (lastDotInPath != -1 && lastDotInPath < path.length - 1) {
+                val pathExt = path.substring(lastDotInPath + 1).lowercase()
+                if (pathExt.length in 1..8 && pathExt.all { it.isLetterOrDigit() }) {
+                    return pathExt
+                }
+            }
+            val lastSegment = uri.lastPathSegment
+            if (lastSegment != null) {
+                val lastDotInSegment = lastSegment.lastIndexOf('.')
+                if (lastDotInSegment != -1 && lastDotInSegment < lastSegment.length - 1) {
+                    val segExt = lastSegment.substring(lastDotInSegment + 1).lowercase()
+                    if (segExt.length in 1..8 && segExt.all { it.isLetterOrDigit() }) {
+                        return segExt
+                    }
+                }
+            }
+        }
+        return ""
+    }
+
+    private fun looksLikeMarkdownOrHtml(text: String): Boolean {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return false
+        
+        // Check for HTML/XML
+        if (trimmed.startsWith("<") || 
+            trimmed.contains("</html>", ignoreCase = true) || 
+            trimmed.contains("</div>", ignoreCase = true) || 
+            trimmed.contains("</p>", ignoreCase = true) || 
+            trimmed.contains("<!DOCTYPE", ignoreCase = true) || 
+            trimmed.contains("<html", ignoreCase = true) ||
+            trimmed.contains("href=", ignoreCase = true) ||
+            trimmed.contains("src=", ignoreCase = true)
+        ) {
+            return true
+        }
+        
+        // Check for Markdown headers or lists or links or bold formatting
+        if (trimmed.startsWith("#") || 
+            trimmed.contains("\n#") ||
+            trimmed.contains("**") || 
+            trimmed.contains("__") || 
+            (trimmed.contains("[") && trimmed.contains("](")) ||
+            trimmed.contains("\n- ") || 
+            trimmed.contains("\n* ") ||
+            trimmed.contains("\n> ") ||
+            trimmed.contains("`")
+        ) {
+            return true
+        }
+        
+        return false
+    }
+
     private fun triggerBackgroundAnalysis(filename: String, content: String, targetTabId: String? = activeFileIdState.value) {
         lifecycleScope.launch {
             try {
                 val result = GeminiAnalyzer.analyzeFile(filename, content)
                 if (result != null) {
-                    val finalExt = if (result.is_code) result.suggested_extension else "txt"
+                    val finalExt = when (result.suggested_extension.lowercase()) {
+                        "py", "java", "kt", "kts", "js", "ts", "jsx", "tsx", "cpp", "c", "h", "hpp", "html", "htm", "xml", "json", "sh", "md", "yml", "yaml", "conf", "css", "bat" -> result.suggested_extension.lowercase()
+                        else -> if (result.is_code) result.suggested_extension else "txt"
+                    }
                     if (targetTabId != null) {
                         val targetTab = openedFiles.find { it.id == targetTabId }
                         if (targetTab != null) {
@@ -467,17 +579,96 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun saveTabToUri(tab: OpenedFile, uri: Uri): Boolean {
+        val success = tab.pieceTable.saveToUri(this, uri)
+        if (success) {
+            val savedText = tab.pieceTable.getAllText()
+            tab.engine.textState.value = savedText
+            tab.textValue = TextFieldValue(savedText)
+        }
+        return success
+    }
+
     private fun saveFile(onSuccess: (() -> Unit)? = null) {
         val uri = currentUriState.value
         if (uri != null) {
-            if (engine.saveToUri(this, uri, textValueState.value.text)) {
+            val activeTab = openedFiles.find { it.id == activeFileIdState.value }
+            val saveSuccess = if (activeTab != null) {
+                saveTabToUri(activeTab, uri)
+            } else {
+                engine.saveToUri(this, uri, textValueState.value.text)
+            }
+            if (saveSuccess) {
                 isModifiedState.value = false
+                
+                // Keep file extension and file name fully robustly updated on direct saves
+                val name = currentFileNameState.value ?: "Untitled"
+                val ext = getRobustFileExtension(name, uri)
+                if (ext.isNotEmpty() && fileExtensionState.value != ext) {
+                    fileExtensionState.value = ext
+                }
+                
                 Toast.makeText(this, "Saved successfully", Toast.LENGTH_SHORT).show()
                 clearAutosave()
                 onSuccess?.invoke()
             } else {
                 Toast.makeText(this, "Failed to write, trying Save As...", Toast.LENGTH_SHORT).show()
             }
+        }
+    }
+
+    @Composable
+    fun LineNumberGutter(
+        scrollState: ScrollState,
+        totalLines: Int,
+        lineDp: androidx.compose.ui.unit.Dp,
+        lineHeightPx: Float,
+        editorFontSize: Float,
+        secondaryTextColor: Color,
+        surfaceColor: Color,
+        topPaddingDp: androidx.compose.ui.unit.Dp,
+        bottomPaddingDp: androidx.compose.ui.unit.Dp,
+        modifier: Modifier = Modifier
+    ) {
+        val firstVisibleIndex by remember(scrollState, lineHeightPx, totalLines) {
+            derivedStateOf {
+                (scrollState.value / lineHeightPx).toInt().coerceIn(0, (totalLines - 1).coerceAtLeast(0))
+            }
+        }
+
+        val visibleLinesCount = 60
+        val lastVisibleIndex = (firstVisibleIndex + visibleLinesCount).coerceAtMost((totalLines - 1).coerceAtLeast(0))
+
+        Column(
+            modifier = modifier
+                .verticalScroll(scrollState)
+                .background(surfaceColor)
+                .padding(end = 4.dp, top = 4.dp),
+            horizontalAlignment = Alignment.End
+        ) {
+            // Space for overlapping status/tab bar
+            Spacer(modifier = Modifier.height(topPaddingDp))
+
+            Spacer(modifier = Modifier.height(lineDp * firstVisibleIndex))
+
+            for (i in (firstVisibleIndex + 1)..(lastVisibleIndex + 1)) {
+                Text(
+                    text = "$i",
+                    color = secondaryTextColor.copy(alpha = 0.6f),
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    fontSize = (editorFontSize * 0.8f).coerceAtLeast(8f).sp,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                    modifier = Modifier.height(lineDp)
+                )
+            }
+
+            val remainingLines = totalLines - 1 - lastVisibleIndex
+            if (remainingLines > 0) {
+                Spacer(modifier = Modifier.height(lineDp * remainingLines))
+            }
+
+            // Space for overlapping commands bar
+            Spacer(modifier = Modifier.height(bottomPaddingDp))
         }
     }
 
@@ -518,35 +709,54 @@ class MainActivity : ComponentActivity() {
             syncActiveTab()
         }
 
+        // Auto-extract and sync file extension whenever file name changes to guarantee immediate preview availability
+        LaunchedEffect(currentFileName) {
+            val name = currentFileName ?: ""
+            val ext = getFileExtension(name)
+            if (ext != fileExtension) {
+                fileExtension = ext
+            }
+        }
+
         // SAF Launchers
         val openDocumentLauncher = rememberLauncherForActivityResult(
             contract = ActivityResultContracts.OpenDocument(),
             onResult = { uri ->
                 uri?.let {
+                    if (uri.scheme == "content") {
+                        try {
+                            val takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                            contentResolver.takePersistableUriPermission(uri, takeFlags)
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                    }
                     val existingFile = openedFiles.find { it.uri == uri }
                     if (existingFile != null) {
                         switchToTab(existingFile.id)
                     } else {
                         val newEngine = EditorEngine()
-                        newEngine.loadSyntaxColors(this@MainActivity)
                         if (newEngine.loadFromUri(this@MainActivity, uri)) {
                             val content = newEngine.textState.value
                             val name = getFileName(this@MainActivity, uri)
-                            val ext = getFileExtension(name)
+                            val ext = getRobustFileExtension(name, uri)
+                            val finalName = if (name.contains(".") || ext.isEmpty()) name else "$name.$ext"
                             val newFile = OpenedFile(
                                 uri = uri,
-                                fileName = name,
+                                fileName = finalName,
                                 fileExtension = ext,
                                 isModified = false,
                                 textValue = TextFieldValue(content),
                                 engine = newEngine
-                            )
+                            ).apply {
+                                pieceTable.loadFromUri(this@MainActivity, uri)
+                            }
                             if (openedFiles.size == 1 && openedFiles[0].uri == null && !openedFiles[0].isModified && openedFiles[0].textValue.text.isEmpty()) {
                                 openedFiles.clear()
                             }
                             openedFiles.add(newFile)
                             switchToTab(newFile.id)
-                            triggerBackgroundAnalysis(name, content, newFile.id)
+                            triggerBackgroundAnalysis(finalName, content, newFile.id)
                             clearAutosave()
                         } else {
                             Toast.makeText(this@MainActivity, "Failed to load file", Toast.LENGTH_SHORT).show()
@@ -562,10 +772,13 @@ class MainActivity : ComponentActivity() {
                 uri?.let {
                     val pendingTab = tabPendingSaveAndClose
                     if (pendingTab != null) {
+                        val fetchedName = getFileName(this@MainActivity, it)
+                        val ext = getRobustFileExtension(fetchedName, it, pendingTab.fileName)
+                        val finalName = if (fetchedName.contains(".") || ext.isEmpty()) fetchedName else "$fetchedName.$ext"
                         val updatedTab = pendingTab.copy(
                             uri = it,
-                            fileName = getFileName(this@MainActivity, it),
-                            fileExtension = getFileExtension(getFileName(this@MainActivity, it)),
+                            fileName = finalName,
+                            fileExtension = ext,
                             isModified = false
                         )
                         val index = openedFiles.indexOfFirst { file -> file.id == pendingTab.id }
@@ -578,7 +791,7 @@ class MainActivity : ComponentActivity() {
                             fileExtension = updatedTab.fileExtension
                             isModified = updatedTab.isModified
                         }
-                        if (updatedTab.engine.saveToUri(this@MainActivity, it, updatedTab.textValue.text)) {
+                        if (saveTabToUri(updatedTab, it)) {
                             Toast.makeText(this@MainActivity, "Saved successfully", Toast.LENGTH_SHORT).show()
                             closeTab(updatedTab)
                         } else {
@@ -587,15 +800,21 @@ class MainActivity : ComponentActivity() {
                         tabPendingSaveAndClose = null
                     } else {
                         currentUri = it
-                        currentFileName = getFileName(this@MainActivity, it)
-                        fileExtension = getFileExtension(currentFileName ?: "")
-                        if (engine.saveToUri(this@MainActivity, it, textValue.text)) {
+                        val fetchedName = getFileName(this@MainActivity, it)
+                        val ext = getRobustFileExtension(fetchedName, it, currentFileName)
+                        val finalName = if (fetchedName.contains(".") || ext.isEmpty()) fetchedName else "$fetchedName.$ext"
+                        currentFileName = finalName
+                        fileExtension = ext
+                        val activeTab = openedFiles.find { it.id == activeFileIdState.value }
+                        val success = if (activeTab != null) saveTabToUri(activeTab, it) else engine.saveToUri(this@MainActivity, it, textValue.text)
+                        if (success) {
                             isModified = false
                             Toast.makeText(this@MainActivity, "Saved successfully", Toast.LENGTH_SHORT).show()
                             clearAutosave()
                         } else {
                             Toast.makeText(this@MainActivity, "Failed to save file", Toast.LENGTH_SHORT).show()
                         }
+                        syncActiveTab()
                     }
                 }
             }
@@ -619,48 +838,72 @@ class MainActivity : ComponentActivity() {
         }
 
         val onCutAction = {
-            val selection = textValue.selection
-            val newText = engine.cutSelection(selection.start, selection.end)
-            textValue = TextFieldValue(
-                text = newText,
-                selection = TextRange(selection.start.coerceAtMost(newText.length))
-            )
-            isModified = true
+            val view = codeEditorView
+            if (view != null) {
+                view.cut()
+                isModified = true
+            } else {
+                val selection = textValue.selection
+                val newText = engine.cutSelection(selection.start, selection.end)
+                textValue = TextFieldValue(
+                    text = newText,
+                    selection = TextRange(selection.start.coerceAtMost(newText.length))
+                )
+                isModified = true
+            }
         }
 
         val onPasteAction = {
-            val selection = textValue.selection
-            val newText = engine.paste(selection.start)
-            textValue = TextFieldValue(
-                text = newText,
-                selection = TextRange((selection.start + engine.cutBuffer.length).coerceAtMost(newText.length))
-            )
-            isModified = true
+            val view = codeEditorView
+            if (view != null) {
+                view.paste()
+                isModified = true
+            } else {
+                val selection = textValue.selection
+                val newText = engine.paste(selection.start)
+                textValue = TextFieldValue(
+                    text = newText,
+                    selection = TextRange((selection.start + engine.cutBuffer.length).coerceAtMost(newText.length))
+                )
+                isModified = true
+            }
         }
 
         val onUndoAction = {
-            val previous = engine.undo()
-            if (previous != null) {
-                textValue = TextFieldValue(
-                    text = previous,
-                    selection = TextRange(previous.length.coerceAtMost(textValue.selection.start))
-                )
+            val view = codeEditorView
+            if (view != null) {
+                view.undo()
                 isModified = true
             } else {
-                Toast.makeText(this@MainActivity, "Nothing to undo", Toast.LENGTH_SHORT).show()
+                val previous = engine.undo()
+                if (previous != null) {
+                    textValue = TextFieldValue(
+                        text = previous,
+                        selection = TextRange(previous.length.coerceAtMost(textValue.selection.start))
+                    )
+                    isModified = true
+                } else {
+                    Toast.makeText(this@MainActivity, "Nothing to undo", Toast.LENGTH_SHORT).show()
+                }
             }
         }
 
         val onRedoAction = {
-            val next = engine.redo()
-            if (next != null) {
-                textValue = TextFieldValue(
-                    text = next,
-                    selection = TextRange(next.length.coerceAtMost(textValue.selection.start))
-                )
+            val view = codeEditorView
+            if (view != null) {
+                view.redo()
                 isModified = true
             } else {
-                Toast.makeText(this@MainActivity, "Nothing to redo", Toast.LENGTH_SHORT).show()
+                val next = engine.redo()
+                if (next != null) {
+                    textValue = TextFieldValue(
+                        text = next,
+                        selection = TextRange(next.length.coerceAtMost(textValue.selection.start))
+                    )
+                    isModified = true
+                } else {
+                    Toast.makeText(this@MainActivity, "Nothing to redo", Toast.LENGTH_SHORT).show()
+                }
             }
         }
 
@@ -682,194 +925,40 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        Column(
+        Box(
             modifier = modifier
                 .fillMaxSize()
                 .background(backgroundColor)
         ) {
-            // Top Status Bar (Immersive UI style)
-            val text = textValue.text
-            val wordCount = if (text.isBlank()) 0 else text.trim().split("\\s+".toRegex()).size
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 6.dp)
-                    .clip(androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
-                    .background(surfaceColor)
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    modifier = Modifier.weight(1f),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .weight(1f, fill = false)
-                            .horizontalScroll(rememberScrollState())
-                            .clip(androidx.compose.foundation.shape.RoundedCornerShape(4.dp))
-                            .clickable { showRenameDialog = true }
-                            .padding(horizontal = 6.dp, vertical = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Text(
-                            text = currentFileName ?: "Untitled",
-                            color = textColor,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1
-                        )
-                        Text(
-                            text = "✎",
-                            color = secondaryTextColor,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 12.sp
-                        )
-                    }
-                    Text(
-                        text = "W: $wordCount",
-                        color = secondaryTextColor,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium,
-                        maxLines = 1
-                    )
-                }
-
-                Spacer(modifier = Modifier.width(8.dp))
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    if (isModified) {
-                        Text(
-                            text = "[Modified]",
-                            color = textColor,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(end = 4.dp),
-                            maxLines = 1
-                        )
-                    }
-                    
-                    Row(
-                        modifier = Modifier
-                            .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
-                            .clickable { showKeyboardShortcutsDialog = true }
-                            .padding(horizontal = 6.dp, vertical = 3.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        val configuration = androidx.compose.ui.platform.LocalConfiguration.current
-                        val isPhysicalKeyboard = configuration.keyboard == android.content.res.Configuration.KEYBOARD_QWERTY ||
-                                configuration.hardKeyboardHidden == android.content.res.Configuration.HARDKEYBOARDHIDDEN_NO
-                        
-                        val keyboardLabel = if (isPhysicalKeyboard) "Physical key" else "Soft key"
-                        
-                        Text(
-                            text = "⌨ $keyboardLabel",
-                            color = secondaryTextColor,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-            }
-
-            // Multi-file Tab Bar (only shown if openedFiles.size >= 2)
-            if (openedFiles.size >= 2) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 8.dp, end = 8.dp, bottom = 6.dp)
-                        .clip(androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
-                        .background(surfaceColor)
-                        .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 6.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    openedFiles.forEach { file ->
-                        val isActive = file.id == activeFileIdState.value
-                        val tabBg = if (isActive) {
-                            if (isDark) Color(0xFF222222) else Color(0xFFEEEEEE)
-                        } else {
-                            Color.Transparent
-                        }
-                        
-                        Row(
-                            modifier = Modifier
-                                .widthIn(min = 60.dp, max = 150.dp)
-                                .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
-                                .background(tabBg)
-                                .clickable {
-                                    switchToTab(file.id)
-                                }
-                                .padding(horizontal = 10.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            val dot = if (file.isModified) "* " else ""
-                            val labelText = "$dot${file.fileName}"
-                            Text(
-                                text = labelText,
-                                color = if (isActive) textColor else secondaryTextColor,
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 12.sp,
-                                fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
-                                maxLines = 1,
-                                modifier = Modifier
-                                    .weight(1f, fill = false)
-                                    .basicMarquee(
-                                        iterations = Int.MAX_VALUE,
-                                        delayMillis = 1200
-                                    )
-                            )
-                            
-                            // Close icon 'x'
-                            Box(
-                                modifier = Modifier
-                                    .clip(androidx.compose.foundation.shape.CircleShape)
-                                    .clickable {
-                                        if (file.isModified) {
-                                            tabToClosePendingConfirm = file
-                                        } else {
-                                            closeTab(file)
-                                        }
-                                    }
-                                    .padding(horizontal = 4.dp, vertical = 2.dp)
-                            ) {
-                                Text(
-                                    text = "×",
-                                    color = if (isActive) textColor else secondaryTextColor,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Gutter + Text Field
+            // Gutter + Text Field (Main Editing Area, occupying the full space of the Box)
             val density = LocalDensity.current
             val lineDp = (editorFontSize * (22f / 14f)).dp
             val lineHeightPx = with(density) { lineDp.toPx() }
 
+            // Auto-scroll smoothly on cursor/selection changes
+            val coroutineScope = rememberCoroutineScope()
+            LaunchedEffect(textValue.selection) {
+                val selectionStart = textValue.selection.start
+                if (selectionStart >= 0 && selectionStart <= textValue.text.length) {
+                    val textBeforeCursor = textValue.text.substring(0, selectionStart)
+                    val lineOfCursor = textBeforeCursor.count { it == '\n' }
+                    val targetScrollY = (lineOfCursor * lineHeightPx).toInt()
+                    val visibleHeightPx = with(density) { 400.dp.toPx() }
+                    val currentScrollY = scrollState.value
+                    if (targetScrollY < currentScrollY || targetScrollY > (currentScrollY + visibleHeightPx - lineHeightPx * 2)) {
+                        val safeTarget = (targetScrollY - visibleHeightPx / 2).toInt().coerceAtLeast(0)
+                        MsiAnimations.msi_scrolling(coroutineScope, scrollState, safeTarget)
+                    }
+                }
+            }
+
+            val hasTabs = openedFiles.size >= 2
+            val topPaddingDp = if (hasTabs) 112.dp else 64.dp
+            val bottomPaddingDp = 104.dp
+
             BoxWithConstraints(
                 modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .background(backgroundColor)
+                    .fillMaxSize()
                     .pointerInput(Unit) {
                         awaitPointerEventScope {
                             var initialDistance = 0f
@@ -879,7 +968,6 @@ class MainActivity : ComponentActivity() {
                                 val activePointers = changes.filter { it.pressed }
                                 
                                 if (activePointers.size >= 2) {
-                                    // Consume events on Initial pass to block BasicTextField cursor movement or selection
                                     changes.forEach { it.consume() }
                                     
                                     val p1 = activePointers[0].position
@@ -903,204 +991,365 @@ class MainActivity : ComponentActivity() {
                         }
                     }
             ) {
-                val totalLines = textValue.text.split("\n").size
-                val scrollOffset = scrollState.value
-                val firstVisibleIndex = (scrollOffset / lineHeightPx).toInt().coerceIn(0, totalLines - 1)
-                
-                // Buffer to keep render performance high
-                val visibleLinesCount = 60
-                val lastVisibleIndex = (firstVisibleIndex + visibleLinesCount).coerceAtMost(totalLines - 1)
-
-                Row(modifier = Modifier.fillMaxSize()) {
-                    // Line Number Gutter (Minimal and elegant)
-                    Column(
-                        modifier = Modifier
-                            .widthIn(min = 30.dp)
-                            .fillMaxHeight()
-                            .background(surfaceColor)
-                            .verticalScroll(scrollState)
-                            .padding(end = 4.dp, top = 4.dp),
-                        horizontalAlignment = Alignment.End
-                    ) {
-                        Spacer(modifier = Modifier.height(lineDp * firstVisibleIndex))
-
-                        for (i in (firstVisibleIndex + 1)..(lastVisibleIndex + 1)) {
-                            Text(
-                                text = "$i",
-                                color = secondaryTextColor.copy(alpha = 0.6f),
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = (editorFontSize * 0.8f).coerceAtLeast(8f).sp,
-                                textAlign = TextAlign.End,
-                                modifier = Modifier.height(lineDp)
-                            )
-                        }
-
-                        val remainingLines = totalLines - 1 - lastVisibleIndex
-                        if (remainingLines > 0) {
-                            Spacer(modifier = Modifier.height(lineDp * remainingLines))
-                        }
-                    }
-
-                    // Divider line between Gutter and Editor Area
-                    Box(
-                        modifier = Modifier
-                            .fillMaxHeight()
-                            .width(1.dp)
-                            .background(borderColor)
-                    )
-
-                    // BasicTextField Main Editing Area
-                    BasicTextField(
-                        value = textValue,
-                        onValueChange = {
-                            if (it.text != textValue.text) {
-                                engine.pushUndo(textValue.text)
-                                isModified = true
-                            }
-                            textValue = it
-                            engine.textState.value = it.text
-                        },
-                        textStyle = TextStyle(
-                            color = textColor,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = editorFontSize.sp,
-                            lineHeight = (editorFontSize * (22f / 14f)).sp
-                        ),
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight()
-                            .verticalScroll(scrollState)
-                            .background(Color.Transparent)
-                            .focusRequester(focusRequester)
-                            .testTag("editor_text_field")
-                            .onKeyEvent { keyEvent ->
-                                if (keyEvent.type == KeyEventType.KeyDown && keyEvent.isCtrlPressed) {
-                                    when (keyEvent.key) {
-                                        Key.O, Key.S -> {
-                                            onSaveAction()
-                                            true
-                                        }
-                                        Key.W -> {
-                                            onSearchAction()
-                                            true
-                                        }
-                                        Key.X -> {
-                                            onExitAction()
-                                            true
-                                        }
-                                        Key.K -> {
-                                            onCutAction()
-                                            true
-                                        }
-                                        Key.U -> {
-                                            onPasteAction()
-                                            true
-                                        }
-                                        Key.Z -> {
-                                            onUndoAction()
-                                            true
-                                        }
-                                        Key.Y -> {
-                                            onRedoAction()
-                                            true
-                                        }
-                                        else -> false
-                                    }
-                                } else {
-                                    false
+                val activeTab = openedFiles.find { it.id == activeFileIdState.value }
+                if (activeTab != null) {
+                    AndroidView(
+                        factory = { ctx ->
+                            CodeEditorView(ctx).apply {
+                                codeEditorView = this
+                                setPieceTable(activeTab.pieceTable)
+                                setFileExtension(fileExtension)
+                                setEditorFontSize(editorFontSize)
+                                setEditorColors(
+                                    bg = if (isDark) 0xFF1E1E1E.toInt() else 0xFFFFFFFF.toInt(),
+                                    text = if (isDark) 0xFFE0E0E0.toInt() else 0xFF212121.toInt(),
+                                    keyword = 0xFFFF9500.toInt(),
+                                    string = 0xFF00DD00.toInt(),
+                                    comment = 0xFF808080.toInt(),
+                                    gutterBg = if (isDark) 0xFF121212.toInt() else 0xFFF5F5F5.toInt(),
+                                    gutterText = if (isDark) 0xFF888888.toInt() else 0xFF777777.toInt(),
+                                    cursor = if (isDark) 0xFFFFFFFF.toInt() else 0xFF000000.toInt(),
+                                    lineHighlight = if (isDark) 0xFF2D2D2D.toInt() else 0xFFE8F0FE.toInt()
+                                )
+                                onTextChangedListener = { newText ->
+                                    textValue = TextFieldValue(newText)
+                                    isModified = true
                                 }
                             }
-                            .padding(start = 8.dp, top = 4.dp, end = 8.dp),
-                        cursorBrush = SolidColor(textColor),
-                        visualTransformation = { text ->
-                            val highlighted = engine.buildHighlightedAnnotatedString(text.text, fileExtension)
-                            TransformedText(highlighted, OffsetMapping.Identity)
-                        }
+                        },
+                        update = { view ->
+                            codeEditorView = view
+                            view.setEditorFontSize(editorFontSize)
+                            view.setFileExtension(fileExtension)
+                            view.setPieceTable(activeTab.pieceTable)
+                            view.cursorLine = activeTab.cursorLine
+                            view.cursorCol = activeTab.cursorCol
+                            view.setEditorColors(
+                                bg = if (isDark) 0xFF1E1E1E.toInt() else 0xFFFFFFFF.toInt(),
+                                text = if (isDark) 0xFFE0E0E0.toInt() else 0xFF212121.toInt(),
+                                keyword = 0xFFFF9500.toInt(),
+                                string = 0xFF00DD00.toInt(),
+                                comment = 0xFF808080.toInt(),
+                                gutterBg = if (isDark) 0xFF121212.toInt() else 0xFFF5F5F5.toInt(),
+                                gutterText = if (isDark) 0xFF888888.toInt() else 0xFF777777.toInt(),
+                                cursor = if (isDark) 0xFFFFFFFF.toInt() else 0xFF000000.toInt(),
+                                lineHighlight = if (isDark) 0xFF2D2D2D.toInt() else 0xFFE8F0FE.toInt()
+                            )
+                        },
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(top = topPaddingDp, bottom = bottomPaddingDp)
+                            .testTag("editor_text_field")
                     )
                 }
             }
 
-            // Bottom Commands Bar (Immersive UI style)
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 8.dp, end = 8.dp, bottom = 8.dp)
-                    .clip(androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
-                    .background(surfaceColor)
-                    .padding(horizontal = 6.dp, vertical = 6.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+            // Floating Action Button for MD/HTML preview (aligned to bottom start with bottom offset)
+            val currentExt = fileExtension.lowercase()
+            val physicalExt = getFileExtension(currentFileName ?: "").lowercase()
+            val hasPreviewableContent = looksLikeMarkdownOrHtml(textValue.text)
+            val isPreviewable = currentExt == "md" || currentExt == "markdown" || currentExt == "mdown" || currentExt == "html" || currentExt == "htm" ||
+                                physicalExt == "md" || physicalExt == "markdown" || physicalExt == "mdown" || physicalExt == "html" || physicalExt == "htm" ||
+                                hasPreviewableContent
+
+            if (isPreviewable) {
+                val previewExt = if (physicalExt == "md" || currentExt == "md" || physicalExt == "markdown" || currentExt == "markdown" || (hasPreviewableContent && !textValue.text.trim().startsWith("<"))) "md" else "html"
+                FloatingActionButton(
+                    onClick = {
+                        val intent = Intent(this@MainActivity, PreviewActivity::class.java).apply {
+                            putExtra(PreviewActivity.EXTRA_FILE_NAME, currentFileName ?: "Untitled")
+                            putExtra(PreviewActivity.EXTRA_CONTENT, textValue.text)
+                            putExtra(PreviewActivity.EXTRA_EXTENSION, previewExt)
+                        }
+                        startActivity(intent)
+                    },
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(start = 16.dp, bottom = bottomPaddingDp + 16.dp)
+                        .testTag("preview_fab"),
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
                 ) {
-                    NanoShortcutButton(
-                        shortcut = "^X",
-                        label = "Exit",
-                        onClick = onExitAction,
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("exit_button")
-                    )
-                    NanoShortcutButton(
-                        shortcut = "^O",
-                        label = "Save",
-                        onClick = onSaveAction,
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("save_button")
-                    )
-                    NanoShortcutButton(
-                        shortcut = "^W",
-                        label = "Search",
-                        onClick = onSearchAction,
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("search_button")
-                    )
-                    NanoShortcutButton(
-                        shortcut = "^K",
-                        label = "Cut",
-                        onClick = onCutAction,
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("cut_button")
+                    Icon(
+                        imageVector = androidx.compose.material.icons.Icons.Filled.Visibility,
+                        contentDescription = "Preview HTML/Markdown"
                     )
                 }
-                Spacer(modifier = Modifier.height(2.dp))
+            }
+
+            // OVERLAPPED LAYOUT FOR TOP STATUS BAR AND MULTI-TAB BAR (Floating on top)
+            Column(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth()
+                    .background(Color.Transparent)
+            ) {
+                // Top Status Bar (Immersive UI style with premium translucent design)
+                val text = textValue.text
+                val stats = NativeEditorHelper.analyze(text)
+                val wordCount = stats[1]
+
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                        .clip(androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
+                        .background(surfaceColor.copy(alpha = 0.92f))
+                        .border(1.dp, borderColor.copy(alpha = 0.5f), androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    NanoShortcutButton(
-                        shortcut = "^U",
-                        label = "Paste",
-                        onClick = onPasteAction,
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .weight(1f, fill = false)
+                                .horizontalScroll(rememberScrollState())
+                                .clip(androidx.compose.foundation.shape.RoundedCornerShape(4.dp))
+                                .clickable { showRenameDialog = true }
+                                .padding(horizontal = 6.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = currentFileName ?: "Untitled",
+                                color = textColor,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1
+                            )
+                            Text(
+                                text = "✎",
+                                color = secondaryTextColor,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 12.sp
+                            )
+                        }
+                        Text(
+                            text = "W: $wordCount",
+                            color = secondaryTextColor,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        if (isModified) {
+                            Text(
+                                text = "[Modified]",
+                                color = textColor,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(end = 4.dp),
+                                maxLines = 1
+                            )
+                        }
+                        
+                        Row(
+                            modifier = Modifier
+                                .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+                                .clickable { showKeyboardShortcutsDialog = true }
+                                .padding(horizontal = 6.dp, vertical = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+                            val isPhysicalKeyboard = configuration.keyboard == android.content.res.Configuration.KEYBOARD_QWERTY ||
+                                    configuration.hardKeyboardHidden == android.content.res.Configuration.HARDKEYBOARDHIDDEN_NO
+                            
+                            val keyboardLabel = if (isPhysicalKeyboard) "Physical key" else "Soft key"
+                            
+                            Text(
+                                text = "⌨ $keyboardLabel",
+                                color = secondaryTextColor,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+
+                // Multi-file Tab Bar (only shown if openedFiles.size >= 2)
+                if (hasTabs) {
+                    Row(
                         modifier = Modifier
-                            .weight(1f)
-                            .testTag("paste_button")
-                    )
-                    NanoShortcutButton(
-                        shortcut = "^Z",
-                        label = "Undo",
-                        onClick = onUndoAction,
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("undo_button")
-                    )
-                    NanoShortcutButton(
-                        shortcut = "^Y",
-                        label = "Redo",
-                        onClick = onRedoAction,
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("redo_button")
-                    )
-                    NanoShortcutButton(
-                        shortcut = "^R",
-                        label = "Open",
-                        onClick = { openDocumentLauncher.launch(arrayOf("text/*")) },
-                        modifier = Modifier.weight(1f)
-                    )
+                            .fillMaxWidth()
+                            .padding(start = 8.dp, end = 8.dp, bottom = 6.dp)
+                            .clip(androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
+                            .background(surfaceColor.copy(alpha = 0.92f))
+                            .border(1.dp, borderColor.copy(alpha = 0.5f), androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
+                            .horizontalScroll(rememberScrollState())
+                            .padding(horizontal = 6.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        openedFiles.forEach { file ->
+                            val isActive = file.id == activeFileIdState.value
+                            val tabBg = if (isActive) {
+                                if (isDark) Color(0xFF222222) else Color(0xFFEEEEEE)
+                            } else {
+                                Color.Transparent
+                            }
+                            
+                            Row(
+                                modifier = Modifier
+                                    .widthIn(min = 60.dp, max = 150.dp)
+                                    .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                                    .background(tabBg)
+                                    .clickable {
+                                        switchToTab(file.id)
+                                    }
+                                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                val dot = if (file.isModified) "* " else ""
+                                val labelText = "$dot${file.fileName}"
+                                Text(
+                                    text = labelText,
+                                    color = if (isActive) textColor else secondaryTextColor,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 12.sp,
+                                    fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
+                                    maxLines = 1,
+                                    modifier = Modifier
+                                        .weight(1f, fill = false)
+                                        .basicMarquee(
+                                            iterations = Int.MAX_VALUE,
+                                            delayMillis = 1200
+                                        )
+                                )
+                                
+                                // Close icon 'x'
+                                Box(
+                                    modifier = Modifier
+                                        .clip(androidx.compose.foundation.shape.CircleShape)
+                                        .clickable {
+                                            if (file.isModified) {
+                                                tabToClosePendingConfirm = file
+                                            } else {
+                                                closeTab(file)
+                                            }
+                                        }
+                                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = "×",
+                                        color = if (isActive) textColor else secondaryTextColor,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // OVERLAPPED LAYOUT FOR BOTTOM COMMANDS BAR (Floating at the bottom)
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .background(Color.Transparent)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 8.dp, end = 8.dp, bottom = 8.dp)
+                        .clip(androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
+                        .background(surfaceColor.copy(alpha = 0.92f))
+                        .border(1.dp, borderColor.copy(alpha = 0.5f), androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
+                        .padding(horizontal = 6.dp, vertical = 6.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        NanoShortcutButton(
+                            shortcut = "^X",
+                            label = "Exit",
+                            onClick = onExitAction,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("exit_button")
+                        )
+                        NanoShortcutButton(
+                            shortcut = "^O",
+                            label = "Save",
+                            onClick = onSaveAction,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("save_button")
+                        )
+                        NanoShortcutButton(
+                            shortcut = "^W",
+                            label = "Search",
+                            onClick = onSearchAction,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("search_button")
+                        )
+                        NanoShortcutButton(
+                            shortcut = "^K",
+                            label = "Cut",
+                            onClick = onCutAction,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("cut_button")
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        NanoShortcutButton(
+                            shortcut = "^U",
+                            label = "Paste",
+                            onClick = onPasteAction,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("paste_button")
+                        )
+                        NanoShortcutButton(
+                            shortcut = "^Z",
+                            label = "Undo",
+                            onClick = onUndoAction,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("undo_button")
+                        )
+                        NanoShortcutButton(
+                            shortcut = "^Y",
+                            label = "Redo",
+                            onClick = onRedoAction,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("redo_button")
+                        )
+                        NanoShortcutButton(
+                            shortcut = "^R",
+                            label = "Open",
+                            onClick = { openDocumentLauncher.launch(arrayOf("text/*")) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
                 }
             }
         }
@@ -1116,7 +1365,7 @@ class MainActivity : ComponentActivity() {
                 onDismissRequest = { showSearchDialog = false },
                 title = {
                     Text(
-                        text = "Search & Replace",
+                        text = stringResource(id = R.string.title_search),
                         color = textColor,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
@@ -1141,7 +1390,7 @@ class MainActivity : ComponentActivity() {
                                     )
                                 }
                             },
-                            label = { Text("Search text", color = secondaryTextColor, fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
+                            label = { Text(stringResource(id = R.string.label_search), color = secondaryTextColor, fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
                             textStyle = TextStyle(color = textColor, fontFamily = FontFamily.Monospace, fontSize = 14.sp),
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedTextColor = textColor,
@@ -1158,7 +1407,7 @@ class MainActivity : ComponentActivity() {
                         OutlinedTextField(
                             value = replaceText,
                             onValueChange = { replaceText = it },
-                            label = { Text("Replace with", color = secondaryTextColor, fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
+                            label = { Text(stringResource(id = R.string.label_replace), color = secondaryTextColor, fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
                             textStyle = TextStyle(color = textColor, fontFamily = FontFamily.Monospace, fontSize = 14.sp),
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedTextColor = textColor,
@@ -1403,7 +1652,7 @@ class MainActivity : ComponentActivity() {
                 onDismissRequest = { showRenameDialog = false },
                 title = {
                     Text(
-                        text = "Rename",
+                        text = stringResource(id = R.string.title_rename),
                         color = textColor,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
@@ -1418,7 +1667,7 @@ class MainActivity : ComponentActivity() {
                         OutlinedTextField(
                             value = newFileName,
                             onValueChange = { newFileName = it },
-                            label = { Text("File Name", color = secondaryTextColor, fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
+                            label = { Text(stringResource(id = R.string.label_file_name), color = secondaryTextColor, fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
                             textStyle = TextStyle(color = textColor, fontFamily = FontFamily.Monospace, fontSize = 14.sp),
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedTextColor = textColor,
@@ -1442,24 +1691,33 @@ class MainActivity : ComponentActivity() {
                             onClick = { showRenameDialog = false },
                             colors = ButtonDefaults.textButtonColors(contentColor = secondaryTextColor)
                         ) {
-                            Text("Cancel", fontFamily = FontFamily.Monospace)
+                            Text(stringResource(id = R.string.btn_cancel), fontFamily = FontFamily.Monospace)
                         }
                         Spacer(modifier = Modifier.width(8.dp))
                         TextButton(
                             onClick = {
                                 val trimmed = newFileName.trim()
                                 if (trimmed.isNotEmpty()) {
+                                    val uri = currentUri
+                                    if (uri != null) {
+                                        try {
+                                            android.provider.DocumentsContract.renameDocument(contentResolver, uri, trimmed)
+                                        } catch (e: Exception) {
+                                            e.printStackTrace()
+                                        }
+                                    }
                                     currentFileName = trimmed
                                     val newExt = getFileExtension(trimmed)
                                     fileExtension = newExt
                                     // Trigger online analysis with Gemini or offline fallback
                                     triggerBackgroundAnalysis(trimmed, textValue.text)
+                                    syncActiveTab()
                                 }
                                 showRenameDialog = false
                             },
                             colors = ButtonDefaults.textButtonColors(contentColor = textColor)
                         ) {
-                            Text("Save", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+                            Text(stringResource(id = R.string.btn_save), fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -1816,5 +2074,8 @@ data class OpenedFile(
     var fileExtension: String,
     var isModified: Boolean,
     var textValue: TextFieldValue,
-    val engine: EditorEngine
+    val engine: EditorEngine,
+    val pieceTable: PieceTable = PieceTable(),
+    var cursorLine: Int = 0,
+    var cursorCol: Int = 0
 )

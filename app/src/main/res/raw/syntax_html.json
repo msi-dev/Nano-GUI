@@ -1,0 +1,11 @@
+{
+  "extension": "html",
+  "keyword_pattern": "</?[a-zA-Z0-9:_.-]+|(\\s[a-zA-Z0-9:_.-]+=)",
+  "comment_pattern": "<!--[\\s\\S]*?-->",
+  "string_pattern": "\"[^\"]*\"|'[^']*'",
+  "default_colors": {
+    "keyword": "#FF55FF",
+    "string": "#00DD00",
+    "comment": "#808080"
+  }
+}

@@ -21,130 +21,124 @@ class EditorEngine {
     var cutBuffer: String = ""
         private set
         
-    private var syntaxColorsJson: JSONObject? = null
+    private val patternCache = HashMap<String, Triple<Pattern?, Pattern?, Pattern?>>()
+    private val colorCache = HashMap<String, Triple<Color, Color, Color>>()
 
-    fun loadSyntaxColors(context: Context) {
+    private fun loadSyntaxFromResource(context: Context, ext: String): JSONObject? {
+        val extension = ext.lowercase()
         try {
-            val resourceId = context.resources.getIdentifier("syntax_colors", "raw", context.packageName)
+            val resourceId = context.resources.getIdentifier("syntax_$extension", "raw", context.packageName)
             if (resourceId != 0) {
                 val inputStream = context.resources.openRawResource(resourceId)
                 val reader = BufferedReader(InputStreamReader(inputStream))
                 val jsonStr = reader.use { it.readText() }
-                syntaxColorsJson = JSONObject(jsonStr)
+                return JSONObject(jsonStr)
             }
         } catch (e: Exception) {
             e.printStackTrace()
         }
+        return null
     }
 
-    fun getSyntaxColors(extension: String): Map<String, Int> {
-        val result = mutableMapOf<String, Int>()
-        val json = syntaxColorsJson ?: return result
-        try {
-            val extensions = json.optJSONObject("extensions")
-            var colorObj = extensions?.optJSONObject(extension.lowercase())
-            if (colorObj == null) {
-                colorObj = json.optJSONObject("default")
+    private fun getPatternsForExtension(context: Context, ext: String): Triple<Pattern?, Pattern?, Pattern?> {
+        val extension = ext.lowercase()
+        val cached = patternCache[extension]
+        if (cached != null) return cached
+
+        val json = loadSyntaxFromResource(context, extension)
+        var commentPattern: Pattern? = null
+        var stringPattern: Pattern? = null
+        var keywordPattern: Pattern? = null
+
+        if (json != null) {
+            val kwPat = json.optString("keyword_pattern", "")
+            if (kwPat.isNotEmpty()) {
+                keywordPattern = Pattern.compile(kwPat)
             }
-            if (colorObj != null) {
-                val keys = colorObj.keys()
-                while (keys.hasNext()) {
-                    val key = keys.next()
-                    val hex = colorObj.getString(key)
-                    result[key] = android.graphics.Color.parseColor(hex)
+            val strPat = json.optString("string_pattern", "")
+            if (strPat.isNotEmpty()) {
+                stringPattern = Pattern.compile(strPat)
+            }
+            val comPat = json.optString("comment_pattern", "")
+            if (comPat.isNotEmpty()) {
+                commentPattern = Pattern.compile(comPat)
+            }
+        } else {
+            // Default logic fallback if no JSON found
+            commentPattern = Pattern.compile("#.*|//.*")
+            keywordPattern = Pattern.compile("\\b(if|else|for|while|return)\\b")
+            stringPattern = Pattern.compile("\"[^\"]*\"|'[^']*'")
+        }
+
+        val triple = Triple(keywordPattern, stringPattern, commentPattern)
+        patternCache[extension] = triple
+        return triple
+    }
+
+    private fun getColorsForExtension(context: Context, ext: String): Triple<Color, Color, Color> {
+        val extension = ext.lowercase()
+        
+        // 1. Check if XML color overrides exist
+        val xmlKeywordResId = context.resources.getIdentifier("highlight_${extension}_keyword", "color", context.packageName)
+        val xmlStringResId = context.resources.getIdentifier("highlight_${extension}_string", "color", context.packageName)
+        val xmlCommentResId = context.resources.getIdentifier("highlight_${extension}_comment", "color", context.packageName)
+
+        var keywordColor: Color? = null
+        var stringColor: Color? = null
+        var commentColor: Color? = null
+
+        if (xmlKeywordResId != 0) {
+            try {
+                keywordColor = Color(context.getColor(xmlKeywordResId))
+            } catch (e: Exception) { e.printStackTrace() }
+        }
+        if (xmlStringResId != 0) {
+            try {
+                stringColor = Color(context.getColor(xmlStringResId))
+            } catch (e: Exception) { e.printStackTrace() }
+        }
+        if (xmlCommentResId != 0) {
+            try {
+                commentColor = Color(context.getColor(xmlCommentResId))
+            } catch (e: Exception) { e.printStackTrace() }
+        }
+
+        // 2. Load from JSON if XML does not exist
+        if (keywordColor == null || stringColor == null || commentColor == null) {
+            val json = loadSyntaxFromResource(context, extension)
+            if (json != null) {
+                val colorsObj = json.optJSONObject("default_colors")
+                if (colorsObj != null) {
+                    if (keywordColor == null) {
+                        val hex = colorsObj.optString("keyword", "#FFFF55")
+                        keywordColor = Color(android.graphics.Color.parseColor(hex))
+                    }
+                    if (stringColor == null) {
+                        val hex = colorsObj.optString("string", "#00DD00")
+                        stringColor = Color(android.graphics.Color.parseColor(hex))
+                    }
+                    if (commentColor == null) {
+                        val hex = colorsObj.optString("comment", "#808080")
+                        commentColor = Color(android.graphics.Color.parseColor(hex))
+                    }
                 }
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
         }
-        return result
+
+        // 3. Fallback defaults if still null
+        val finalKeyword = keywordColor ?: Color(0xFFFF9500)
+        val finalString = stringColor ?: Color(0xFF00DD00)
+        val finalComment = commentColor ?: Color(0xFF808080)
+
+        return Triple(finalKeyword, finalString, finalComment)
     }
 
-    fun buildHighlightedAnnotatedString(text: String, extension: String): AnnotatedString {
-        val colors = getSyntaxColors(extension)
-        val keywordColor = colors["keyword"]?.let { Color(it) } ?: Color(0xFFFF9500)
-        val stringColor = colors["string"]?.let { Color(it) } ?: Color(0xFF00DD00)
-        val commentColor = colors["comment"]?.let { Color(it) } ?: Color(0xFF808080)
-
+    fun buildHighlightedAnnotatedString(context: Context, text: String, extension: String): AnnotatedString {
         return buildAnnotatedString {
             append(text)
 
-            val commentPattern: Pattern?
-            var stringPattern: Pattern? = Pattern.compile("\"[^\"]*\"|'[^']*'")
-            val keywordPattern: Pattern?
-
-            when (extension.lowercase()) {
-                "py" -> {
-                    commentPattern = Pattern.compile("#.*")
-                    keywordPattern = Pattern.compile("\\b(def|class|if|else|elif|for|while|try|except|import|from|as|return|in|is|and|or|not|None|True|False|lambda|pass|break|continue)\\b")
-                }
-                "java" -> {
-                    commentPattern = Pattern.compile("//.*|/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/")
-                    keywordPattern = Pattern.compile("\\b(public|private|protected|class|interface|enum|void|int|double|float|long|boolean|char|byte|short|if|else|for|while|do|switch|case|break|continue|return|try|catch|finally|throw|throws|import|package|new|this|super|static|final|abstract|synchronized|volatile|transient)\\b")
-                }
-                "kt", "kts" -> {
-                    commentPattern = Pattern.compile("//.*|/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/")
-                    keywordPattern = Pattern.compile("\\b(package|import|class|interface|object|fun|val|var|typealias|if|else|when|for|while|do|return|break|continue|throw|try|catch|finally|this|super|constructor|init|null|true|false|as|is|in|companion|private|protected|public|internal|open|abstract|override|final|data|sealed|enum|annotation|inline|infix|operator|tailrec|external|suspend)\\b")
-                }
-                "js", "ts", "jsx", "tsx" -> {
-                    commentPattern = Pattern.compile("//.*|/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/")
-                    keywordPattern = Pattern.compile("\\b(const|let|var|function|class|if|else|for|while|do|switch|case|default|break|continue|return|try|catch|finally|throw|import|export|from|as|new|this|super|static|async|await|yield|null|undefined|true|false|typeof|instanceof|in|of|interface|type|namespace|enum|public|private|protected|readonly|any|string|number|boolean|void|never|unknown)\\b")
-                }
-                "cpp", "c", "h", "hpp" -> {
-                    commentPattern = Pattern.compile("//.*|/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/")
-                    keywordPattern = Pattern.compile("\\b(auto|const|double|float|int|long|short|char|void|signed|unsigned|struct|union|class|enum|typedef|public|private|protected|if|else|for|while|do|switch|case|default|break|continue|return|try|catch|throw|namespace|using|friend|virtual|override|inline|static|extern|volatile|mutable|template|typename|operator|new|delete|this|nullptr|true|false)\\b")
-                }
-                "html", "htm" -> {
-                    commentPattern = Pattern.compile("<!--[\\s\\S]*?-->")
-                    keywordPattern = Pattern.compile("</?[a-zA-Z0-9:_.-]+|(\\s[a-zA-Z0-9:_.-]+=)")
-                }
-                "xml" -> {
-                    commentPattern = Pattern.compile("<!--[\\s\\S]*?-->")
-                    keywordPattern = Pattern.compile("</?[a-zA-Z0-9:_.-]+|(\\s[a-zA-Z0-9:_.-]+=)")
-                }
-                "json" -> {
-                    commentPattern = null
-                    keywordPattern = Pattern.compile("\"[^\"]*\"\\s*:")
-                }
-                "sh" -> {
-                    commentPattern = Pattern.compile("#.*")
-                    keywordPattern = Pattern.compile("\\b(if|then|else|elif|fi|case|esac|for|while|in|do|done|exit|return|echo|local|function)\\b")
-                }
-                "md" -> {
-                    commentPattern = Pattern.compile("<!--[\\s\\S]*?-->|`[^`]+`|```[\\s\\S]*?```")
-                    keywordPattern = Pattern.compile("(?m)(^#{1,6}\\s+.+|\\*\\*[^\\*]+\\*\\*|\\*[^\\*]+\\*)")
-                    stringPattern = Pattern.compile("\\[[^\\]]+\\]\\([^\\)]+\\)")
-                }
-                "yml", "yaml" -> {
-                    commentPattern = Pattern.compile("#.*")
-                    keywordPattern = Pattern.compile("\\b[a-zA-Z0-9_-]+\\b(?=\\s*:)")
-                    stringPattern = Pattern.compile("\"[^\"]*\"|'[^']*'")
-                }
-                "conf" -> {
-                    commentPattern = Pattern.compile(";.*|#.*")
-                    keywordPattern = Pattern.compile("\\[[^\\]]+\\]|\\b[a-zA-Z0-9_.-]+\\b(?=\\s*=)")
-                    stringPattern = Pattern.compile("\"[^\"]*\"|'[^']*'")
-                }
-                "css" -> {
-                    commentPattern = Pattern.compile("/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/")
-                    keywordPattern = Pattern.compile("(\\b[a-zA-Z0-9_-]+\\b(?=\\s*:)|^[ \\t]*[.#a-zA-Z0-9_-]+(?=\\s*\\{))")
-                    stringPattern = Pattern.compile("\"[^\"]*\"|'[^']*'")
-                }
-                "bat" -> {
-                    commentPattern = Pattern.compile("(?im)^[ \\t]*(?:rem|REM)\\b.*|::.*")
-                    keywordPattern = Pattern.compile("(?i)\\b(echo|set|if|else|for|in|do|goto|call|exit|pause|rem)\\b")
-                    stringPattern = Pattern.compile("\"[^\"]*\"|'[^']*'")
-                }
-                "csv" -> {
-                    commentPattern = null
-                    keywordPattern = null
-                    stringPattern = null
-                }
-                else -> {
-                    commentPattern = Pattern.compile("#.*|//.*")
-                    keywordPattern = Pattern.compile("\\b(if|else|for|while|return)\\b")
-                }
-            }
+            val (keywordPattern, stringPattern, commentPattern) = getPatternsForExtension(context, extension)
+            val (keywordColor, stringColor, commentColor) = getColorsForExtension(context, extension)
 
             if (keywordPattern != null) {
                 val matcher = keywordPattern.matcher(text)

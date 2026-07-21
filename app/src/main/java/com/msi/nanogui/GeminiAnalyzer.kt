@@ -103,7 +103,7 @@ object GeminiAnalyzer {
             $contentSample
             
             Based on the filename and the content sample, provide the classification and the most suitable syntax highlighting extension.
-            Supported syntax highlighting extensions are: "py", "java", "xml", "json", "sh", "kt", "js", "ts", "cpp", "html", or "txt" (for plain text).
+            Supported syntax highlighting extensions are: "py", "java", "xml", "json", "sh", "kt", "js", "ts", "cpp", "html", "md", or "txt" (for plain text).
             Map other languages to the closest supported extension if possible (e.g., C -> "cpp", Kotlin -> "kt", Shell/Bash -> "sh").
             If it is clearly plain text/prose and not any programming code, set is_code to false and suggested_extension to "txt".
         """.trimIndent()
@@ -123,7 +123,7 @@ object GeminiAnalyzer {
                                "{\n" +
                                "  \"is_code\": true/false,\n" +
                                "  \"detected_language\": \"language_name\",\n" +
-                               "  \"suggested_extension\": \"py\"/\"java\"/\"xml\"/\"json\"/\"sh\"/\"kt\"/\"js\"/\"ts\"/\"cpp\"/\"html\"/\"txt\"\n" +
+                               "  \"suggested_extension\": \"py\"/\"java\"/\"xml\"/\"json\"/\"sh\"/\"kt\"/\"js\"/\"ts\"/\"cpp\"/\"html\"/\"md\"/\"txt\"\n" +
                                "}"
                     )
                 )

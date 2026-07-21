@@ -1,0 +1,11 @@
+{
+  "extension": "json",
+  "keyword_pattern": "\"[^\"]*\"\\s*:",
+  "comment_pattern": "",
+  "string_pattern": ":\\s*\"[^\"]*\"",
+  "default_colors": {
+    "keyword": "#FFFF55",
+    "string": "#00DD00",
+    "comment": "#808080"
+  }
+}

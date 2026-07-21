@@ -1,0 +1,11 @@
+{
+  "extension": "cpp",
+  "keyword_pattern": "\\b(auto|const|double|float|int|long|short|char|void|signed|unsigned|struct|union|class|enum|typedef|public|private|protected|if|else|for|while|do|switch|case|default|break|continue|return|try|catch|throw|namespace|using|friend|virtual|override|inline|static|extern|volatile|mutable|template|typename|operator|new|delete|this|nullptr|true|false)\\b",
+  "comment_pattern": "//.*|/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/",
+  "string_pattern": "\"[^\"]*\"|'[^']*'",
+  "default_colors": {
+    "keyword": "#5555FF",
+    "string": "#00DD00",
+    "comment": "#808080"
+  }
+}

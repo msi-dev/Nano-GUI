@@ -1,0 +1,7 @@
+[
+{
+  "directory": "/app/applet/app/.cxx/Debug/6s5d545o/arm64-v8a",
+  "command": "/opt/android/sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++ --target=aarch64-none-linux-android23 --sysroot=/opt/android/sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/sysroot -Dnanogui_native_EXPORTS -g -DANDROID -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security   -fno-limit-debug-info  -fPIC -o CMakeFiles/nanogui-native.dir/native-lib.cpp.o -c /app/applet/app/src/main/cpp/native-lib.cpp",
+  "file": "/app/applet/app/src/main/cpp/native-lib.cpp"
+}
+]

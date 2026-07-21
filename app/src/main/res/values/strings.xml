@@ -1,3 +1,15 @@
 <resources>
     <string name="app_name">Nano GUI</string>
+    <string name="title_search">Search &amp; Replace</string>
+    <string name="label_search">Search text</string>
+    <string name="label_replace">Replace with</string>
+    <string name="title_help">Help &amp; Shortcuts</string>
+    <string name="title_rename">Rename File</string>
+    <string name="label_file_name">File Name</string>
+    <string name="btn_cancel">Cancel</string>
+    <string name="btn_save">Save</string>
+    <string name="btn_dismiss">Dismiss</string>
+    <string name="title_unsaved_changes">Unsaved Changes</string>
+    <string name="text_unsaved_message">You have unsaved changes. Do you want to save before closing?</string>
+    <string name="btn_dont_save">Don\'t Save</string>
 </resources>

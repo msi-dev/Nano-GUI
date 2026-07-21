@@ -1,0 +1,11 @@
+{
+  "extension": "py",
+  "keyword_pattern": "\\b(def|class|if|else|elif|for|while|try|except|import|from|as|return|in|is|and|or|not|None|True|False|lambda|pass|break|continue)\\b",
+  "comment_pattern": "#.*",
+  "string_pattern": "\"[^\"]*\"|'[^']*'",
+  "default_colors": {
+    "keyword": "#FF9500",
+    "string": "#00DD00",
+    "comment": "#808080"
+  }
+}

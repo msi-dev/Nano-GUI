@@ -1,0 +1,11 @@
+{
+  "extension": "md",
+  "keyword_pattern": "(?m)(^#{1,6}\\s+.+|\\*\\*[^\\*]+\\*\\*|\\*[^\\*]+\\*)",
+  "comment_pattern": "<!--[\\s\\S]*?-->|`[^`]+`|```[\\s\\S]*?```",
+  "string_pattern": "\\[[^\\]]+\\]\\([^\\)]+\\)",
+  "default_colors": {
+    "keyword": "#FF9500",
+    "string": "#00DD00",
+    "comment": "#808080"
+  }
+}

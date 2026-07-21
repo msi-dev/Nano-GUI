@@ -1,0 +1,11 @@
+{
+  "extension": "kt",
+  "keyword_pattern": "\\b(package|import|class|interface|object|fun|val|var|typealias|if|else|when|for|while|do|return|break|continue|throw|try|catch|finally|this|super|constructor|init|null|true|false|as|is|in|companion|private|protected|public|internal|open|abstract|override|final|data|sealed|enum|annotation|inline|infix|operator|tailrec|external|suspend)\\b",
+  "comment_pattern": "//.*|/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/",
+  "string_pattern": "\"[^\"]*\"|'[^']*'",
+  "default_colors": {
+    "keyword": "#FF55FF",
+    "string": "#00DD00",
+    "comment": "#808080"
+  }
+}

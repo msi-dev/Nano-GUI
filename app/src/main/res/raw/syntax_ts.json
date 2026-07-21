@@ -1,0 +1,11 @@
+{
+  "extension": "ts",
+  "keyword_pattern": "\\b(const|let|var|function|class|if|else|for|while|do|switch|case|default|break|continue|return|try|catch|finally|throw|import|export|from|as|new|this|super|static|async|await|yield|null|undefined|true|false|typeof|instanceof|in|of|interface|type|namespace|enum|public|private|protected|readonly|any|string|number|boolean|void|never|unknown)\\b",
+  "comment_pattern": "//.*|/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/",
+  "string_pattern": "\"[^\"]*\"|'[^']*'",
+  "default_colors": {
+    "keyword": "#55FFFF",
+    "string": "#00DD00",
+    "comment": "#808080"
+  }
+}
